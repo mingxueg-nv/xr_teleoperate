@@ -493,12 +493,26 @@ camera_start() {
     fi
     local vendor_modules="${UNITREE_MODULES_DIR:-$HOME/.Unitree/YUSHU_4A_AGTH_G2Y_7.1}"
     local setup_extra=()
-    if [[ ! -f "$vendor_modules/ko/kfifo_buf.ko" ]]; then
+    local camera_drivers_complete=true
+    local module
+    for module in max96712.ko sgcam-gmsl2.ko pwm-gpio.ko; do
+        if [[ ! -f "$vendor_modules/ko/$module" ]]; then
+            camera_drivers_complete=false
+        fi
+    done
+    if [[ "$camera_drivers_complete" == true ]]; then
+        if [[ ! -f "$vendor_modules/ko/kfifo_buf.ko" ||
+              ! -f "$vendor_modules/ko/bmi088.ko" ]]; then
+            warn "Camera drivers are complete but optional BMI088 IMU modules are missing"
+            warn "camera-start will fully reload the camera drivers with --skip-imu"
+            setup_extra=(--skip-imu)
+        fi
+    else
         if [[ -c /dev/video0 && -c /dev/video1 && -c /dev/video2 && -c /dev/video3 ]]; then
-            warn "Vendor driver package is missing; camera-start is using --controls-only"
+            warn "Core vendor camera drivers are incomplete; camera-start is using --controls-only"
             setup_extra=(--controls-only)
         else
-            die "Vendor driver package is missing and no camera devices are present"
+            die "Core vendor camera drivers are incomplete and no camera devices are present"
         fi
     fi
     info "Preparing GMSL cameras and starting four JPEG DDS publishers; robot joints are not controlled."

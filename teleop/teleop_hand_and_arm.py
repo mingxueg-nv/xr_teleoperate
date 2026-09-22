@@ -33,6 +33,7 @@ from teleop.robot_control.robot_arm_ik import (
     H2_ArmIK,
 )
 from teleimager.image_client import ImageClient
+from teleop.utils.camera_watchdog import CameraStreamLost, RecordingCameraWatchdog
 from teleop.utils.episode_writer import EpisodeWriter
 from teleop.utils.ipc import IPC_Server
 from teleop.utils.motion_switcher import MotionSwitcher, LocoClientWrapper
@@ -166,6 +167,28 @@ def get_state() -> dict:
     }
 
 
+def _camera_failure_hold(arm_ctrl):
+    """Latch measured arm pose until the operator takes over in damping mode."""
+    try:
+        hold_q = arm_ctrl.get_current_dual_arm_q()
+        arm_ctrl.ctrl_dual_arm(hold_q, np.zeros_like(hold_q))
+        logger_mp.critical(
+            "CAMERA FAILURE HOLD: arm commands are frozen at the measured pose. "
+            "Enter damping mode with the remote, then press Ctrl+C once to exit."
+        )
+    except Exception as exc:
+        logger_mp.critical(
+            f"Could not latch the measured arm pose: {exc}. "
+            "Use the remote damping/emergency procedure immediately."
+        )
+
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        logger_mp.info("Operator ended camera-failure hold.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # basic control parameters
@@ -224,6 +247,14 @@ if __name__ == "__main__":
         type=int,
         default=10,
         help="Native camera DDS domain. Keep separate from Unitree/Sharpa domain 0. Default: 10.",
+    )
+    parser.add_argument(
+        "--camera-watchdog-timeout-s",
+        type=float,
+        default=0.25,
+        help="When recording from DDS, stop teleop and quarantine the active episode "
+        "if any of the four camera sequence IDs freezes for this many seconds. "
+        "0 disables. Default: 0.25.",
     )
     parser.add_argument(
         "--network-interface",
@@ -307,6 +338,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     logger_mp.info(f"args: {args}")
+    recorder = None
+    camera_watchdog = None
+    camera_safety_abort = False
 
     try:
         # setup dds communication domains id
@@ -339,6 +373,7 @@ if __name__ == "__main__":
             img_client = DDSImageClient(
                 domain_id=args.camera_dds_domain,
                 network_interface=args.network_interface,
+                require_warmup=args.record,
             )
             logger_mp.info(f"[camera] using native DDS image source (domain {args.camera_dds_domain})")
         elif args.camera_source == "ros":
@@ -576,6 +611,23 @@ if __name__ == "__main__":
                     body_joint_names=_body_joint_names,
                 )
 
+        if (
+            args.record
+            and args.camera_source == "dds"
+            and args.camera_watchdog_timeout_s > 0
+        ):
+            camera_watchdog = RecordingCameraWatchdog(
+                img_client,
+                timeout_s=args.camera_watchdog_timeout_s,
+                logger=logger_mp,
+            )
+            camera_watchdog.start()
+            logger_mp.info(
+                "[camera] recording watchdog enabled for "
+                "head_left + head_right + wrist_left + wrist_right; "
+                f"timeout={args.camera_watchdog_timeout_s:.3f}s"
+            )
+
         logger_mp.info("----------------------------------------------------------------")
         logger_mp.info("�  Press [c] on keyboard to calibrate (recommended before starting).")
         logger_mp.info("�  Press [r] on keyboard or [B button] on right controller to start syncing.")
@@ -590,6 +642,11 @@ if __name__ == "__main__":
         READY = True  # now ready to (1) enter START state
         while not STOP:
             time.sleep(0.033)
+
+            if camera_watchdog is not None:
+                camera_failure = camera_watchdog.failure()
+                if camera_failure is not None:
+                    raise CameraStreamLost(camera_failure)
 
             tele_data = None
             if args.input_mode == "controller":
@@ -655,6 +712,20 @@ if __name__ == "__main__":
             if camera_config["right_wrist_camera"]["enable_zmq"]:
                 if args.record:
                     right_wrist_img = img_client.get_right_wrist_frame()
+
+            if camera_watchdog is not None:
+                camera_failure = camera_watchdog.failure()
+                if camera_failure is not None:
+                    if RECORD_RUNNING:
+                        RECORD_RUNNING = False
+                        try:
+                            recorder.abort_episode(camera_failure)
+                        except Exception as exc:
+                            logger_mp.critical(
+                                "Failed to quarantine the camera-invalid episode: "
+                                f"{exc}. Do not convert the most recent episode."
+                            )
+                    raise CameraStreamLost(camera_failure)
 
             # record mode
             if args.record and RECORD_TOGGLE:
@@ -942,15 +1013,33 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         logger_mp.info("⛔ KeyboardInterrupt, exiting program...")
+    except CameraStreamLost as exc:
+        camera_safety_abort = True
+        logger_mp.critical(
+            "Teleop stopped because recording camera data is invalid: "
+            f"{exc}. The active episode was quarantined and will not be converted."
+        )
+        _camera_failure_hold(arm_ctrl)
     except Exception:
         import traceback
 
         logger_mp.error(traceback.format_exc())
     finally:
         try:
-            arm_ctrl.ctrl_dual_arm_go_home()
+            if camera_watchdog is not None:
+                camera_watchdog.stop()
         except Exception as e:
-            logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
+            logger_mp.error(f"Failed to stop camera watchdog: {e}")
+
+        if camera_safety_abort:
+            logger_mp.critical(
+                "Skipping automatic arm go-home after camera safety abort."
+            )
+        else:
+            try:
+                arm_ctrl.ctrl_dual_arm_go_home()
+            except Exception as e:
+                logger_mp.error(f"Failed to ctrl_dual_arm_go_home: {e}")
 
         try:
             if args.ipc:
@@ -987,7 +1076,7 @@ if __name__ == "__main__":
             logger_mp.error(f"Failed to stop sim state subscriber: {e}")
 
         try:
-            if args.record:
+            if recorder is not None:
                 recorder.close()
         except Exception as e:
             logger_mp.error(f"Failed to close recorder: {e}")
