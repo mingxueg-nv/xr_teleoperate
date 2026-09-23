@@ -14,15 +14,30 @@ The commands assume this simple home-directory layout:
 
 Adjust the paths directly if your checkouts are stored elsewhere.
 
+## Choose the workflow
+
+- **Teleoperation and data collection:** complete Sections **1, 2, and 3**. Do not run Section 4.
+- **Policy deployment and evaluation:** complete Sections **1, 2, and 4**. Do not run Section 3.
+
+> **CRITICAL SAFETY WARNING — CLEAR THE FRONT WORKSPACE**
+>
+> Starting the teleoperation control script or the real-robot evaluation script causes both robot arms to rise. Before starting either script, move the table and every other object out of the area in front of and within reach of the robot. Do not start until the full arm workspace is clear.
+>
+> **DAMPING WARNING:** Before pressing `L2+B`, operators must already be securely supporting both robot arms/hands from safe positions. Continue supporting them while entering damping because the arms can drop when active joint support is removed.
+
 ## 1. Safety requirements
 
 1. Enter robot modes in this order:
    - *After the robot output "零力矩模式"*
-   - `L2+B`: damping
+   - While operators securely support both robot arms/hands, press `L2+B`: damping
    - `L2+Up`: preparation pose
    - `R2+Y`: standing/control mode
 2. Wait for each transition to finish before continuing.
-3. If teleop or policy behavior become abnormal, enter damping (`L2+B`) for 5 seconds before debugging software.
+3. If teleoperation or policy behavior becomes abnormal:
+   - Immediately press `Ctrl+C` to stop the active teleoperation or deployment script.
+   - Operators must then securely support both robot arms/hands from safe positions and, while continuing to support them, press `L2+B` to enter damping.
+   - Damping removes active joint support, so unsupported arms can fall and damage the hands, robot, or surrounding equipment.
+   - Keep the robot in damping before debugging the software.
 4. Teleoperation and policy evaluation must never run at the same time.
 
 ## 2. Start Thor services after every cold boot
@@ -95,11 +110,13 @@ Keep this terminal running. Confirm:
 
 With the robot safely supported:
 
-1. Press `L2+B` for damping.
+1. Securely support both robot arms/hands, then press `L2+B` for damping while continuing to support them.
 2. Press `L2+Up` for preparation mode.
 3. Press `R2+Y` for standing/control mode.
 
 ### 3.4 Workstation terminal E: start teleoperation and recording
+
+> **WARNING — BOTH ARMS WILL RISE:** Before running the command below, move the table and all other objects away from the front and full reach of the robot. Confirm that no person is inside the arm workspace.
 
 The following example records a PNP trocar task:
 
@@ -154,7 +171,8 @@ Use the workstation IP address that is reachable from the PICO headset.
 6. Hold the standard reference pose and press `c` to calibrate.
 7. Press keyboard `r` to start tracking.
 8. Press keyboard `s` to control start and end of an episode.
-9. Press `q` or controller `A`.
+9. Press `q` or controller `A` to stop teleoperation.
+10. After the script stops, securely support both robot arms/hands and, while continuing to support them, press `L2+B` to enter damping. Keep supporting the arms until the robot is stable.
 
 ### 3.7 Convert raw recordings to LeRobot format
 
@@ -205,12 +223,14 @@ Keep the terminal running. Confirm that the server loads the checkpoint and list
 
 With the robot safely supported:
 
-1. Press `L2+B` for damping.
+1. Securely support both robot arms/hands, then press `L2+B` for damping while continuing to support them.
 2. Press `L2+Up` for preparation mode.
 3. Press `R2+Y` for standing/control mode.
 4. Confirm that the arms, hands, tool, and task objects have enough clearance.
 
 ### 4.3 Workstation terminal G: start GR00T N1.7 evaluation
+
+> **WARNING — BOTH ARMS WILL RISE:** Before running the command below, move the table and all other objects away from the front and full reach of the robot. Confirm that no person is inside the arm workspace.
 
 ```bash
 conda activate tv
@@ -297,13 +317,14 @@ The initial-pose file must match the task and robot joint convention. For a newl
 
 1. Test with the robot safely supported.
 2. Watch both arms throughout the transition.
-3. Enter damping immediately if the target appears inconsistent.
+3. If the target appears inconsistent, stop the script immediately. Securely support both robot arms/hands and, while continuing to support them, press `L2+B` to enter damping.
 4. Do not average clearly different initial-pose modes unless that midpoint has been physically reviewed.
 
 ## 6. Stopping evaluation
 
 Normal stop:
 
-1. Wait for the safety and homing sequence to finish.
-2. Press `Ctrl+C`.
-4. Enter damping(`L2+B`) for 5s and hold the robot arms at the same time to avoid the hands fall down. 
+1. Press `Ctrl+C` to start the normal shutdown and automatic homing sequence.
+2. Wait for the homing sequence and script cleanup to finish.
+3. Securely support both robot arms/hands and, while continuing to support them, press `L2+B` to enter damping.
+4. Keep supporting both arms/hands until the robot is stable; otherwise they can drop and damage the hands or surrounding equipment.
